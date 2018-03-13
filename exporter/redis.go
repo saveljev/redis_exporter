@@ -116,6 +116,8 @@ var (
 
 	instanceInfoFields = map[string]bool{"role": true, "redis_version": true, "redis_build_id": true, "redis_mode": true, "os": true}
 	slaveInfoFields    = map[string]bool{"master_host": true, "master_port": true, "slave_read_only": true}
+
+	dataBasesCount = 0
 )
 
 func (e *Exporter) initGauges() {
@@ -379,6 +381,15 @@ func extractConfigMetrics(config []string, addr string, alias string, scrapes ch
 		strKey := config[pos*2]
 		strVal := config[pos*2+1]
 
+		if strKey == "databases" {
+			var err error
+			dataBasesCount, err = strconv.Atoi(strVal)
+
+			if err != nil {
+				fmt.Errorf("invalid config value for key databases: %#v", strVal)
+			}
+		}
+
 		// todo: we can add more configs to this map if there's interest
 		if !map[string]bool{
 			"maxmemory": true,
@@ -399,6 +410,7 @@ func (e *Exporter) extractInfoMetrics(info, addr string, alias string, scrapes c
 
 	instanceInfo := map[string]string{}
 	slaveInfo := map[string]string{}
+	handledDBs := map[string]bool{}
 	for _, line := range lines {
 		log.Debugf("info: %s", line)
 		if len(line) > 0 && line[0] == '#' {
@@ -493,6 +505,7 @@ func (e *Exporter) extractInfoMetrics(info, addr string, alias string, scrapes c
 			if avgTTL > -1 {
 				scrapes <- scrapeResult{Name: "db_avg_ttl_seconds", Addr: addr, Alias: alias, DB: split[0], Value: avgTTL}
 			}
+			handledDBs[split[0]] = true;
 			continue
 		}
 
@@ -522,6 +535,19 @@ func (e *Exporter) extractInfoMetrics(info, addr string, alias string, scrapes c
 		}
 
 		scrapes <- scrapeResult{Name: metricName, Addr: addr, Alias: alias, Value: val}
+	}
+
+	for dbIndex := 0; dbIndex < dataBasesCount; dbIndex++ {
+
+		dbName := "db"+strconv.Itoa(dbIndex)
+
+		_, exists := handledDBs[dbName]
+
+		if !exists {
+
+			scrapes <- scrapeResult{Name: "db_keys", Addr: addr, Alias: alias, DB: dbName, Value: 0}
+			scrapes <- scrapeResult{Name: "db_keys_expiring", Addr: addr, Alias: alias, DB: dbName, Value: 0}
+		}
 	}
 
 	e.metricsMtx.RLock()
